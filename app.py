@@ -2,14 +2,14 @@ import requests
 import os
 import csv
 from dotenv import load_dotenv
+from collections import defaultdict
 
 load_dotenv()
 
 URL_API = os.getenv("URL_API")
 API_KEY = os.getenv("API_KEY")
-AGENTE_EMAIL = os.getenv("AGENTE_EMAIL")
 
-if not URL_API or not API_KEY or not AGENTE_EMAIL:
+if not URL_API or not API_KEY:
     print("Erro: variáveis de ambiente não carregadas corretamente.")
     exit(1)
 
@@ -21,51 +21,50 @@ print("Buscando dados da API...")
 
 try:
     response = requests.get(URL_API, headers=headers, timeout=15)
+    response.raise_for_status()
 except requests.exceptions.RequestException as e:
     print("Erro de conexão:", e)
     exit(1)
 
-if response.status_code == 200:
-    alunos = response.json()
+alunos = response.json()
 
-    meus_alunos = [
-        aluno for aluno in alunos
-        if aluno.get("agenteDoSucesso") == AGENTE_EMAIL
-        and aluno.get("status") != "Inativo"
-    ]
+agentes = defaultdict(list)
+for aluno in alunos:
+    agente = aluno.get("agenteDoSucesso", "Sem agente")
+    agentes[agente].append(aluno)
 
-    print(f"\nTotal de alunos ativos vinculados: {len(meus_alunos)}\n")
+status_possiveis = ["Ativo", "Atencao", "EmRecuperacao", "Suspenso", "Inativo"]
 
-    print("Lista completa de alunos:")
-    for aluno in meus_alunos:
-        print(f"- {aluno.get('nomeCompleto')} | {aluno.get('registrationCode')} | Status: {aluno.get('status')}")
+print("\nResumo por agente:\n")
+resumo = []
 
-    em_alerta = [
-        aluno for aluno in meus_alunos
-        if aluno.get("status") in ["Atencao", "EmRecuperacao"]
-    ]
+for agente, lista in agentes.items():
+    contagem = {status: 0 for status in status_possiveis}
+    for aluno in lista:
+        status = aluno.get("status", "Desconhecido")
+        if status in contagem:
+            contagem[status] += 1
+        else:
+            contagem["Desconhecido"] = contagem.get("Desconhecido", 0) + 1
 
-    print("\nAlunos em atenção ou recuperação:")
-    for aluno in em_alerta:
-        print(f"- {aluno.get('nomeCompleto')} | {aluno.get('registrationCode')} | Status: {aluno.get('status')}")
-    print(f"\nTotal em alerta: {len(em_alerta)}")
+    total = len(lista)
+    print(f"👤 {agente} — Total: {total}")
+    for status in status_possiveis:
+        print(f"  - {status}: {contagem[status]}")
+    print()
 
-    print("\nGerando arquivos CSV...")
+    resumo.append({
+        "Agente": agente,
+        **contagem,
+        "Total": total
+    })
 
-    with open("alunos.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Nome Completo", "Código de Matrícula", "Status"])
-        for aluno in meus_alunos:
-            writer.writerow([aluno.get("nomeCompleto"), aluno.get("registrationCode"), aluno.get("status")])
+print("Gerando arquivo CSV consolidado...")
 
-    with open("alunos_em_alerta.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Nome Completo", "Código de Matrícula", "Status"])
-        for aluno in em_alerta:
-            writer.writerow([aluno.get("nomeCompleto"), aluno.get("registrationCode"), aluno.get("status")])
+with open("resumo_agentes.csv", "w", newline="", encoding="utf-8") as f:
+    fieldnames = ["Agente", "Ativo", "Atencao", "EmRecuperacao", "Suspenso", "Inativo", "Total"]
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(resumo)
 
-    print("Exportação concluída: arquivos 'alunos.csv' e 'alunos_em_alerta.csv' gerados com sucesso!")
-
-else:
-    print(f"Erro ao buscar dados: {response.status_code}")
-    print("Detalhes:", response.text[:500])
+print("\n✅ Exportação concluída com sucesso! Arquivo: 'resumo_agentes.csv'")
